@@ -89,7 +89,7 @@ g4() {
 
 g5() {
   local br
-  br=$(git rev-parse --abbrev-ref HEAD)
+  br=$(git branch --show-current)
   case "$br" in
     main|master|develop|trunk)
       pass "G5 branch '$br' is exempt trunk" ;;
