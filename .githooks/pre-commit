@@ -1,6 +1,6 @@
 #!/bin/sh
 # pre-commit hook: enforce repo doc standards on staged files.
-# Checks: P1 em-dash ban, P7 forbidden paths.
+# Checks: P1 em-dash ban, P7 forbidden paths, P8 shellcheck.
 # ponytail: eight grep checks, no dependencies. Ceiling: validates staged
 # content only, word-splits path lists (safe: kebab-case rule bans spaces in
 # paths), and treats a repo's very first commit as a new-skill commit.
@@ -35,6 +35,20 @@ for f in $staged; do
       reject "P7 forbidden-path" "$f" "no temp/, old/, archive/, docs/superpowers/, or .planning/ paths" ;;
   esac
 done
+
+# P8: shellcheck on staged bin/* sh scripts. Dev-time only; gated on the
+# tool being installed so commits still pass on hosts without shellcheck.
+if command -v shellcheck >/dev/null 2>&1; then
+  for f in $staged; do
+    case "$f" in
+      bin/*)
+        if ! shellcheck "$f" 2>&1; then
+          reject "P8 shellcheck" "$f" "shellcheck reported warnings/errors"
+        fi
+        ;;
+    esac
+  done
+fi
 
 if [ "$fail" -ne 0 ]; then
   printf '\nBypass (emergencies only): git commit --no-verify\n' >&2
