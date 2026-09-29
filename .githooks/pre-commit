@@ -1,0 +1,43 @@
+#!/bin/sh
+# pre-commit hook: enforce repo doc standards on staged files.
+# Checks: P1 em-dash ban, P7 forbidden paths.
+# ponytail: eight grep checks, no dependencies. Ceiling: validates staged
+# content only, word-splits path lists (safe: kebab-case rule bans spaces in
+# paths), and treats a repo's very first commit as a new-skill commit.
+# Re-verify with the matrix in the feature plan if a check changes.
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+fail=0
+
+reject() {
+  printf 'pre-commit: rejected by %s\n  file: %s\n  rule: %s\n' "$1" "$2" "$3" >&2
+  fail=1
+}
+
+# U+2014 as UTF-8 bytes; octal escapes are POSIX, no literal char in this file.
+EM_DASH=$(printf '\342\200\224')
+
+# P1: no em-dashes in staged markdown (index content, not worktree).
+for f in $staged; do
+  case "$f" in
+    *.md)
+      if git show ":$f" | grep -qF "$EM_DASH"; then
+        reject "P1 em-dash" "$f" "U+2014 found; use comma, colon, parentheses, or hyphen"
+      fi
+      ;;
+  esac
+done
+
+# P7: forbidden directories, any depth.
+for f in $staged; do
+  case "$f" in
+    temp/*|*/temp/*|old/*|*/old/*|archive/*|*/archive/*|docs/superpowers/*|.planning/*)
+      reject "P7 forbidden-path" "$f" "no temp/, old/, archive/, docs/superpowers/, or .planning/ paths" ;;
+  esac
+done
+
+if [ "$fail" -ne 0 ]; then
+  printf '\nBypass (emergencies only): git commit --no-verify\n' >&2
+  exit 1
+fi
+exit 0
