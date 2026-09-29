@@ -133,12 +133,139 @@ g7() {
   fi
 }
 
+TIER=""
+
+detect_tier() {
+  TIER=$(grep -Eo 'Tier:[[:space:]]*(small|medium|large)' AGENTS.md \
+    | head -1 | grep -Eo '(small|medium|large)')
+}
+
+s1() {
+  if [ -z "$TIER" ]; then
+    fail "S1 AGENTS.md declares no 'Tier: small|medium|large'"
+  else
+    pass "S1 tier declared: $TIER"
+  fi
+  if grep -Eq '^#+ .*\<Git\>' AGENTS.md; then
+    pass "S1 AGENTS.md has a Git section"
+  else
+    fail "S1 AGENTS.md has no Git section heading"
+  fi
+}
+
+s2() {
+  if [ -f CLAUDE.md ] && grep -qF '@AGENTS.md' CLAUDE.md; then
+    pass "S2 CLAUDE.md shim present"
+  else
+    fail "S2 CLAUDE.md shim missing or lacks '@AGENTS.md'"
+  fi
+}
+
+s3() {
+  local n
+  if [ -d .agents ]; then
+    n=$(find .agents -maxdepth 1 -name '*.md' | wc -l)
+    if [ "$n" -ge 1 ]; then
+      if [ "$TIER" = small ]; then
+        warn "S3 .agents/ present at small tier (graduation trigger?)"
+      else
+        pass "S3 .agents/ present with $n topic file(s)"
+      fi
+    else
+      fail "S3 .agents/ exists but holds no .md files"
+    fi
+  else
+    case "$TIER" in
+      medium|large) fail "S3 .agents/ required at $TIER tier" ;;
+      small) pass "S3 no .agents/ (fine at small tier)" ;;
+      *) fail "S3 no .agents/ and no tier declared" ;;
+    esac
+  fi
+}
+
+s4() {
+  if [ -f CHANGELOG.md ]; then
+    if grep -qF 'Keep a Changelog' CHANGELOG.md; then
+      pass "S4 CHANGELOG.md follows Keep a Changelog"
+    else
+      fail "S4 CHANGELOG.md exists but lacks 'Keep a Changelog' header"
+    fi
+  else
+    case "$TIER" in
+      medium|large) fail "S4 CHANGELOG.md required at $TIER tier" ;;
+      small) warn "S4 no CHANGELOG.md (fine at small tier unless versioned releases)" ;;
+      *) fail "S4 no CHANGELOG.md and no tier declared" ;;
+    esac
+  fi
+}
+
+s5() {
+  [ -d docs/artifacts ] || { pass "S5 no docs/artifacts/ yet (created on first artifact)"; return; }
+  local missing="" legacy=""
+  [ -d docs/artifacts/features ] || missing="$missing features/"
+  [ -d docs/artifacts/reviews ] || missing="$missing reviews/"
+  [ -d docs/artifacts/choices ] || warn "S5 docs/artifacts/choices/ not created yet (fine until first decision)"
+  local d
+  for d in specs plans multi-plans; do
+    [ -d "docs/artifacts/$d" ] && legacy="$legacy $d/"
+  done
+  [ -n "$legacy" ] && warn "S5 legacy artifact siblings present:$legacy (migrate per restructure-flow)"
+  if [ -n "$missing" ]; then
+    fail "S5 docs/artifacts/ missing subdirs:$missing"
+  else
+    pass "S5 docs/artifacts/ layout ok"
+  fi
+}
+
+# frontmatter field extractor (single-line values only)
+fm_field() { # file key
+  awk -v k="$2" '
+    NR == 1 { if ($0 !~ /^---[[:space:]]*$/) exit; next }
+    /^---[[:space:]]*$/ { exit }
+    index($0, k ":") == 1 {
+      sub("^[^:]*:[[:space:]]*", "")
+      gsub(/^"|"$/, "")
+      print
+      exit
+    }
+  ' "$1"
+}
+
+k_check() { # skills/<name>/SKILL.md
+  local f="$1" dir name desc closing fmsize before
+  dir=$(basename "$(dirname "$f")")
+  before=$FAILS
+  [ "$(head -n 1 "$f")" = "---" ] || { fail "K1 $dir: missing frontmatter"; return; }
+  name=$(fm_field "$f" name)
+  desc=$(fm_field "$f" description)
+  closing=$(awk '/^---[[:space:]]*$/ { c++; if (c == 2) { print NR; exit } }' "$f")
+  if [ -z "$closing" ]; then fail "K1 $dir: unterminated frontmatter"; return; fi
+  fmsize=$(head -n "$closing" "$f" | wc -c)
+  printf '%s' "$name" | grep -Eq '^[a-z0-9][a-z0-9-]*$' \
+    || fail "K1 $dir: name '$name' not kebab-case (must start alphanumeric)"
+  case "$desc" in
+    "Use when"*) : ;;
+    *) fail "K1 $dir: description must start with 'Use when'" ;;
+  esac
+  [ "$fmsize" -le 1024 ] || fail "K1 $dir: frontmatter is ${fmsize} bytes, over 1024"
+  grep -q '^## Overview' "$f" || fail "K2 $dir: missing '## Overview' heading"
+  grep -qE '^## Skill[[:space:]]*$' "$f" && fail "K2 $dir: has '## Skill' heading, use '## Overview'"
+  [ "$FAILS" -eq "$before" ] && pass "K1-K2 $dir: frontmatter and body ok"
+}
+
 cmd_check() {
   if [ ! -f AGENTS.md ]; then
     echo "FAIL not standardized: no AGENTS.md at repo root (bootstrap via project-standardization, then re-run)"
     exit 1
   fi
   g1; g2; g3; g4; g5; g6; g7
+  detect_tier
+  s1; s2; s3; s4; s5
+  local kf
+  for kf in skills/*/SKILL.md; do
+    [ -f "$kf" ] || continue
+    k_check "$kf"
+  done
   echo "---"
   echo "checks: $FAILS fail, $WARNS warn"
   [ "$FAILS" -eq 0 ]
