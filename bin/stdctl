@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# stdctl: standards check for any standardized repo. Bash + coreutils only.
+set -u
+
+FAILS=0
+WARNS=0
+QUIET=0
+
+usage() {
+  cat <<'EOF'
+usage: stdctl check [--quiet]
+
+check   lint the current repo: floor rules G1-G7, structure S1-S5,
+        skills-collection K1-K2. Exit 0 clean, 1 on FAIL or unstandardized
+        repo, 2 on usage error or not a git repo.
+EOF
+  exit 2
+}
+
+pass() { [ "$QUIET" -eq 1 ] || echo "PASS  $1"; }
+fail() { echo "FAIL  $1"; FAILS=$((FAILS + 1)); }
+warn() { echo "WARN  $1"; WARNS=$((WARNS + 1)); }
+
+REPO=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  echo "ERROR not a git repo: stdctl lints the repo you are standing in" >&2
+  exit 2
+}
+cd "$REPO" || exit 2
+
+EM=$'\u2014'
+EXCEPTIONS="README.md AGENTS.md CLAUDE.md CHANGELOG.md STANDARDS.md LICENSE LICENSE.md Makefile Dockerfile SKILL.md Cargo.toml Cargo.lock package.json package-lock.json pnpm-lock.yaml yarn.lock pyproject.toml poetry.lock go.mod go.sum composer.json tauri.conf.json .release-notes.md AGENTS-small.md AGENTS-medium.md AGENTS-large.md README-ai-assistance.md"
+
+g1() {
+  local hits
+  hits=$(git ls-files -z -- '*.md' | xargs -0 -r grep -lF -- "$EM" 2>/dev/null)
+  if [ -n "$hits" ]; then
+    fail "G1 em-dash in: $(printf '%s' "$hits" | tr '\n' ' ')"
+  else
+    pass "G1 no em-dashes in tracked markdown"
+  fi
+}
+
+g2() {
+  # ponytail: worktree find with dependency-dir pruning; tracked-only scan
+  # would miss untracked forbidden dirs, full find would flag node_modules
+  local bad="" d
+  while IFS= read -r d; do bad="$bad ${d#./}/"; done < <(
+    find . \( -name .git -o -name node_modules \
+      -o -name target -o -name dist -o -name build \) -prune -o \
+      -type d \( -name temp -o -name old -o -name archive \
+      -o -name .planning -o -path '*/docs/superpowers' \) -print
+  )
+  if [ -n "$bad" ]; then
+    fail "G2 forbidden paths:$bad"
+  else
+    pass "G2 no forbidden paths"
+  fi
+}
+
+g3() {
+  local bad
+  bad=$(git ls-files | EXC=" $EXCEPTIONS " awk '
+    {
+      base = $0
+      sub(/^.*\//, "", base)
+      if (base ~ /^\./) next
+      if (index(ENVIRON["EXC"], " " base " ") > 0) next
+      if (base !~ /^[a-z0-9][a-z0-9.-]*$/) print $0
+    }')
+  if [ -n "$bad" ]; then
+    fail "G3 non-kebab paths: $(printf '%s\n' "$bad" | head -3 | tr '\n' ' ') (+ $(printf '%s\n' "$bad" | wc -l) total)"
+  else
+    pass "G3 all tracked paths kebab-case or exempt"
+  fi
+}
+
+g4() {
+  local bad
+  bad=$(git ls-files -- 'docs/artifacts/*.md' 'docs/project-management/*.md' \
+    | awk '{ base = $0; sub(/^.*\//, "", base)
+             if (base == "index.md") next
+             if (base !~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+\.md$/) print $0 }')
+  if [ -n "$bad" ]; then
+    fail "G4 non-ISO-8601 artifact names: $(printf '%s\n' "$bad" | tr '\n' ' ')"
+  else
+    pass "G4 artifact filenames ISO 8601 (or none present)"
+  fi
+}
+
+g5() {
+  local br
+  br=$(git rev-parse --abbrev-ref HEAD)
+  case "$br" in
+    main|master|develop|trunk)
+      pass "G5 branch '$br' is exempt trunk" ;;
+    feat/*|fix/*|docs/*|style/*|refactor/*|perf/*|test/*|build/*|ci/*|chore/*|revert/*)
+      if printf '%s' "$br" | grep -Eq '^[a-z]+/[a-z0-9][a-z0-9-]*$'; then
+        pass "G5 branch '$br' conventional"
+      else
+        fail "G5 branch '$br' has a bad description part (kebab, no nested slash)"
+      fi ;;
+    *)
+      fail "G5 branch '$br' is not Conventional Branch <type>/<desc>" ;;
+  esac
+}
+
+g6() {
+  local hp
+  if [ ! -d .githooks ]; then
+    pass "G6 no .githooks dir, nothing to activate"
+    return
+  fi
+  hp=$(git config core.hooksPath)
+  if [ "$hp" != ".githooks" ]; then
+    warn "G6 core.hooksPath is '${hp:-unset}', run: git config core.hooksPath .githooks"
+  elif ! grep -qF '.githooks/** text eol=lf' .gitattributes 2>/dev/null; then
+    warn "G6 .gitattributes missing '.githooks/** text eol=lf'"
+  else
+    pass "G6 hooks activated"
+  fi
+}
+
+g7() {
+  local total bad_n
+  total=$(git rev-list --count HEAD 2>/dev/null || echo 0)
+  if [ "$total" -eq 0 ]; then pass "G7 empty history"; return; fi
+  bad_n=$(git log --format=%s | grep -Ecv \
+    '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?!?: .+|^[Mm]erge |^[Rr]evert |^fixup! |^squash! ')
+  if [ "${bad_n:-0}" -eq 0 ]; then
+    pass "G7 all $total commit subjects Conventional"
+  else
+    warn "G7 $bad_n of $total commit subjects non-Conventional (legacy history allowed)"
+  fi
+}
+
+cmd_check() {
+  if [ ! -f AGENTS.md ]; then
+    echo "FAIL not standardized: no AGENTS.md at repo root (bootstrap via project-standardization, then re-run)"
+    exit 1
+  fi
+  g1; g2; g3; g4; g5; g6; g7
+  echo "---"
+  echo "checks: $FAILS fail, $WARNS warn"
+  [ "$FAILS" -eq 0 ]
+}
+
+case "${1:-}" in
+  check)
+    shift
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --quiet) QUIET=1; shift ;;
+        *) usage ;;
+      esac
+    done
+    cmd_check
+    ;;
+  *) usage ;;
+esac
