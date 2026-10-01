@@ -4,4 +4,9 @@ Standards check for repositories following the project-standardization conventio
 
 ## AI assistance
 
-This project is maintained with AI coding agents following the [agents.md](https://agents.md) convention. Skill source: RubenVanDerVeen/skills.
+- **AI involvement:** AI-driven
+  <!-- human-written | AI-assisted | AI-driven | fully vibecoded -->
+- **Method:** AI work is organized and professionally executed via a personal
+  skill system: brainstorm > spec > plan > subagent execution > review.
+  See the [skills repo](https://github.com/RubenVanDerVeen/skills) and
+  [how the workflow is organized](https://github.com/RubenVanDerVeen/skills/blob/main/docs/workflows/workflow.md).
